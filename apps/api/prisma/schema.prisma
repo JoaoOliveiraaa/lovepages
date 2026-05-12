@@ -1,0 +1,176 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+enum UserRole {
+  USER
+  ADMIN
+}
+
+enum LovePageStatus {
+  DRAFT
+  PENDING_PAYMENT
+  ACTIVE
+  EXPIRED
+  ARCHIVED
+}
+
+enum PaymentStatus {
+  PENDING
+  PAID
+  FAILED
+  EXPIRED
+  REFUNDED
+}
+
+enum PhotoStatus {
+  UPLOADED
+  PROCESSING
+  READY
+  REJECTED
+}
+
+enum WebhookProvider {
+  ABACATE_PAY
+}
+
+enum WebhookDeliveryStatus {
+  RECEIVED
+  PROCESSED
+  FAILED
+}
+
+model User {
+  id           String   @id @default(uuid())
+  email        String   @unique
+  passwordHash String   @map("password_hash")
+  role         UserRole @default(USER)
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+
+  refreshTokens RefreshToken[]
+  lovePages     LovePage[]
+  payments      Payment[]
+  photos        Photo[]
+
+  @@map("users")
+}
+
+model RefreshToken {
+  id        String    @id @default(uuid())
+  userId    String    @map("user_id")
+  tokenHash String    @unique @map("token_hash")
+  expiresAt DateTime  @map("expires_at")
+  revokedAt DateTime? @map("revoked_at")
+  createdAt DateTime  @default(now()) @map("created_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("refresh_tokens")
+}
+
+model LovePage {
+  id               String         @id @default(uuid())
+  userId           String         @map("user_id")
+  slug             String         @unique
+  title            String
+  contentJson      Json?          @map("content_json")
+  status           LovePageStatus @default(DRAFT)
+  pendingPaymentId String?        @unique @map("pending_payment_id")
+  expiresAt        DateTime?      @map("expires_at")
+  createdAt        DateTime       @default(now()) @map("created_at")
+  updatedAt        DateTime       @updatedAt @map("updated_at")
+
+  user             User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  pendingPayment Payment?  @relation("PendingPayment", fields: [pendingPaymentId], references: [id])
+  payments         Payment[] @relation("LovePagePayments")
+  photos           Photo[]
+
+  @@index([userId])
+  @@index([status])
+  @@map("love_pages")
+}
+
+model Payment {
+  id                  String        @id @default(uuid())
+  lovePageId          String        @map("love_page_id")
+  userId              String        @map("user_id")
+  amountCents         Int           @map("amount_cents")
+  currency            String        @default("BRL")
+  status              PaymentStatus @default(PENDING)
+  providerPaymentId   String?       @unique @map("provider_payment_id")
+  idempotencyKey      String        @unique @map("idempotency_key")
+  paidAt              DateTime?     @map("paid_at")
+  lastProviderEventId String?     @map("last_provider_event_id")
+  createdAt           DateTime      @default(now()) @map("created_at")
+  updatedAt           DateTime      @updatedAt @map("updated_at")
+
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  lovePage  LovePage @relation("LovePagePayments", fields: [lovePageId], references: [id], onDelete: Cascade)
+  pendingOn LovePage? @relation("PendingPayment")
+
+  webhookDeliveries WebhookDelivery[]
+
+  @@index([lovePageId])
+  @@index([userId])
+  @@index([status])
+  @@map("payments")
+}
+
+model Photo {
+  id         String      @id @default(uuid())
+  lovePageId String      @map("love_page_id")
+  userId     String      @map("user_id")
+  storageKey String      @unique @map("storage_key")
+  mimeType   String      @map("mime_type")
+  sizeBytes  Int         @map("size_bytes")
+  status     PhotoStatus @default(UPLOADED)
+  sortOrder  Int         @default(0) @map("sort_order")
+  createdAt  DateTime    @default(now()) @map("created_at")
+
+  lovePage LovePage @relation(fields: [lovePageId], references: [id], onDelete: Cascade)
+  user     User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([lovePageId])
+  @@index([userId])
+  @@map("photos")
+}
+
+model WebhookDelivery {
+  id              String                @id @default(uuid())
+  provider        WebhookProvider
+  providerEventId String                @map("provider_event_id")
+  payloadRaw      String                @map("payload_raw")
+  signatureValid  Boolean               @map("signature_valid")
+  status          WebhookDeliveryStatus @default(RECEIVED)
+  paymentId       String?               @map("payment_id")
+  errorMessage    String?               @map("error_message")
+  receivedAt      DateTime              @default(now()) @map("received_at")
+  processedAt     DateTime?             @map("processed_at")
+
+  payment Payment? @relation(fields: [paymentId], references: [id], onDelete: SetNull)
+
+  @@unique([provider, providerEventId])
+  @@index([status])
+  @@map("webhook_deliveries")
+}
+
+model OutboxMessage {
+  id          String    @id @default(uuid())
+  type        String
+  payload     Json
+  createdAt   DateTime  @default(now()) @map("created_at")
+  publishedAt DateTime? @map("published_at")
+  attempts    Int       @default(0)
+  lastError   String?   @map("last_error")
+
+  @@index([publishedAt])
+  @@index([type])
+  @@map("outbox_messages")
+}
